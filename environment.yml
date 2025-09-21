@@ -9,3 +9,5 @@ dependencies:
   - pip:
       - openai-whisper
       - requests
+      - syntok
+

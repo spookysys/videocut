@@ -324,22 +324,76 @@ def sentence_from_words(words: List[Dict[str, Any]]) -> Optional[Dict[str, Any]]
     return {"start": float(start), "end": float(end), "text": text}
 
 
-def split_words_into_sentences(words: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
-    sentences: List[Dict[str, Any]] = []
-    current: List[Dict[str, Any]] = []
+def _compute_word_spans(words: Sequence[Dict[str, Any]]) -> Tuple[str, List[Tuple[int, int, Dict[str, Any]]]]:
+    """Return concatenated transcript text and character spans per Whisper word."""
+    text_parts: List[str] = []
+    spans: List[Tuple[int, int, Dict[str, Any]]] = []
+    cursor = 0
     for word in words:
-        current.append(word)
-        token = word.get("word", "")
-        stripped = token.strip()
-        if stripped and stripped[-1] in ".?!":
-            sentence = sentence_from_words(current)
-            if sentence:
-                sentences.append(sentence)
-            current = []
-    if current:
-        sentence = sentence_from_words(current)
-        if sentence:
+        token = word.get("word")
+        if not isinstance(token, str):
+            raise SystemExit("Whisper word entries must contain a 'word' string.")
+        text_parts.append(token)
+        length = len(token)
+        spans.append((cursor, cursor + length, word))
+        cursor += length
+    return "".join(text_parts), spans
+
+
+def split_words_into_sentences(words: Iterable[Dict[str, Any]]) -> List[Dict[str, Any]]:
+    word_list = list(words)
+    if not word_list:
+        return []
+    try:
+        from syntok.segmenter import analyze as syntok_analyze
+    except ModuleNotFoundError as exc:  # pragma: no cover
+        raise SystemExit(
+            "The 'syntok' package is required for multi-language sentence segmentation. Install it with 'pip install syntok'."
+        ) from exc
+
+    text, spans = _compute_word_spans(word_list)
+    sentences: List[Dict[str, Any]] = []
+    span_index = 0
+    span_count = len(spans)
+
+    for paragraph in syntok_analyze(text):
+        for raw_sentence in paragraph:
+            sentence_tokens = list(raw_sentence)
+            if not sentence_tokens:
+                continue
+            first_token = sentence_tokens[0]
+            last_token = sentence_tokens[-1]
+            sent_start = getattr(first_token, "offset", None)
+            last_offset = getattr(last_token, "offset", None)
+            last_value = getattr(last_token, "value", None)
+            if sent_start is None or last_offset is None or not isinstance(last_value, str):
+                raise SystemExit("Sentence segmentation returned tokens without offsets; verify the installed 'syntok' version.")
+            sent_end = last_offset + len(last_value)
+
+            while span_index < span_count and spans[span_index][1] <= sent_start:
+                span_index += 1
+
+            current_index = span_index
+            sentence_words: List[Dict[str, Any]] = []
+            while current_index < span_count and spans[current_index][0] < sent_end:
+                sentence_words.append(spans[current_index][2])
+                current_index += 1
+
+            if not sentence_words:
+                raise SystemExit("Sentence segmentation produced an empty sentence; check the transcript tokens.")
+
+            sentence = sentence_from_words(sentence_words)
+            if sentence is None:
+                raise SystemExit("Sentence segmentation produced tokens without timing information.")
             sentences.append(sentence)
+            span_index = current_index
+
+    trailing = [span for span in spans[span_index:] if span[2].get("word", "").strip()]
+    if trailing:
+        raise SystemExit("Sentence segmentation left trailing tokens unmatched; review the transcript input.")
+
+    if not sentences:
+        raise SystemExit("Sentence segmentation failed; Whisper transcript contains no complete sentences.")
     return sentences
 
 
