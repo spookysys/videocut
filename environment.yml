@@ -1,0 +1,11 @@
+name: videocut4
+channels:
+  - conda-forge
+  - defaults
+dependencies:
+  - python=3.10
+  - ffmpeg
+  - pip
+  - pip:
+      - openai-whisper
+      - requests
