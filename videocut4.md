@@ -80,8 +80,8 @@ Recompute cascade: deleting an artefact forces that stage and all downstream sta
 
 1. For each input media file:
    - Look for `<basename>.json` in the same directory; if present, use it.
-   - If absent: run Whisper (`word_timestamps=True`, language hint when provided). For each Whisper segment, set `start = first word start`, `end = last word end`.
-   - Write the transcript JSON next to the media file, or to the cache directory when the media path is unwritable.
+   - If absent: run Whisper (`word_timestamps=True`, language hint when provided). Use the word-level timings to re-segment the transcript into full sentences (deterministic splitter, e.g. `.?!` boundaries) and, for each sentence, set `start = first word start`, `end = last word end`.
+   - Write the sentence-level transcript JSON next to the media file, or to the cache directory when the media path is unwritable.
 2. Build `transcript.json`:
    - Assign sequential `segment_id` values in CLI order across all files.
    - Include `file_id` references based on the `files` table.
