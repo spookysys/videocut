@@ -231,8 +231,10 @@ def write_metadata(path: Path, snapshot: Dict[str, Any]) -> None:
 def log_message(log_path: Path, message: str) -> None:
     log_path.parent.mkdir(parents=True, exist_ok=True)
     timestamp = dt.datetime.utcnow().strftime("%Y-%m-%d %H:%M:%S")
+    log_line = f"[{timestamp}] {message}"
     with log_path.open("a", encoding="utf-8") as handle:
-        handle.write(f"[{timestamp}] {message}\n")
+        handle.write(log_line + "\n")
+    print(log_line, flush=True)
 
 
 class OpenRouterClient:
@@ -561,10 +563,21 @@ def run_scoring_stage(context: StageContext, segments: List[Dict[str, Any]]) -> 
     for index in range(0, len(segments), batch_size):
         batches.append(segments[index : index + batch_size])
 
+    total_batches = len(batches)
+    if total_batches == 0:
+        log_message(context.plan_log, "Scoring received no segments; producing empty scores.")
+
+    log_message(context.plan_log, f"Scoring {len(segments)} segment(s) across {total_batches} batch(es).")
+
     kept_entries: List[Dict[str, Any]] = []
     discarded_entries: List[Dict[str, Any]] = []
 
     for batch_index, batch in enumerate(batches):
+        if total_batches:
+            log_message(
+                context.plan_log,
+                f"Scoring batch {batch_index + 1}/{total_batches} ({len(batch)} segment(s))",
+            )
         payload = [
             {
                 "segment_id": entry["segment_id"],
@@ -578,11 +591,11 @@ def run_scoring_stage(context: StageContext, segments: List[Dict[str, Any]]) -> 
             {
                 "role": "system",
                 "content": (
-                    "You score transcript segments for factual accuracy, informational value, form, and importance. "
-                    "fact: +1 truthful/precise, 0 neutral, negative when incorrect. "
-                    "info: 1 when the segment adds substantive information, 0 when filler. "
-                    "form: 1 when delivery is clean with coherent sentences, minimal filler, and pacing informed by the provided speed. Target pacing is roughly 12-18 characters/sec (12-16 acceptable for dense or slower deliveries); apply a soft penalty at 10-12 or 18-20 and a strong penalty below 10 or above 20. "
-                    "importance: 1 when critical to fulfilling the intent. Provide a short note justifying the scores. Respond strictly as JSON matching {'segment_scores': [...]}"
+                    "You score transcript segments for factual accuracy, informational value, form, and importance as a decimal number. What follows are the edges - in most cases, your scores should be decimal values somewhere within the given range:"
+                    "fact: +1.0 truthful/precise, 0.0 neutral, negative only when incorrect. "
+                    "info: 1.0 when the segment adds substantive information, 0.0 when filler. "
+                    "form: 1.0 when delivery is clean with coherent sentences, minimal filler, and pacing informed by the provided speed. Target pacing is roughly 10-18 characters/sec; apply a soft penalty at 8-10 or 18-20 and a strong penalty below 8 or above 20. "
+                    "importance: 1.0 when critical to fulfilling the intent. Provide a short note justifying the scores. Respond strictly as JSON matching {'segment_scores': [...]}"
                 ),
             },
             {"role": "user", "content": json.dumps(payload, indent=2, ensure_ascii=False)},
@@ -1185,6 +1198,8 @@ def run_pipeline(config: CLIConfig) -> None:
 
     context = StageContext(config, stem, cache_dir, output_dir, metadata_path, plan_log, render_log, None)
 
+    log_message(plan_log, f"---- New run begin (stem={stem}) ----")
+
     needs_gpt = any(stage >= 1 for stage in range(start_stage, 6))
     api_key = try_get_openrouter_api_key() if needs_gpt else None
     if needs_gpt and not api_key:
@@ -1204,6 +1219,8 @@ def run_pipeline(config: CLIConfig) -> None:
         transcript = ensure_transcripts(config, context)
     else:
         transcript = load_transcript(context)
+
+    write_metadata(metadata_path, snapshot)
 
     # Stage B
     if start_stage <= 1:
